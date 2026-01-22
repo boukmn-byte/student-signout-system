@@ -1,4 +1,5 @@
-// dom.js
+// dom.js — tiny DOM helpers
+
 export function $(id) {
   return document.getElementById(id);
 }

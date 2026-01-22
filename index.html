@@ -50,6 +50,12 @@
       background: #fff;
     }
     .csv-preview table { margin: 0; }
+
+    /* Scanner */
+    #scanStudentId {
+      font-size: 1.05rem;
+      letter-spacing: 0.5px;
+    }
   </style>
 </head>
 <body>
@@ -86,6 +92,11 @@
           <button class="btn btn-outline-primary" id="quick-students">Go to Students</button>
           <button class="btn btn-outline-secondary admin-only d-none" id="quick-import">Go to CSV Import</button>
           <button class="btn btn-outline-success admin-only d-none" id="addStudentBtn">Add Student</button>
+
+          <!-- Dev-only, shown only when APP_DEV_MODE=true AND admin mode -->
+          <button class="btn btn-outline-danger admin-only d-none" id="resetDbBtn" style="display:none;">
+            Reset DB (Dev)
+          </button>
         </div>
       </div>
     </div>
@@ -143,9 +154,7 @@
   </div>
 
   <!-- Views -->
-  <div id="dashboard-view" class="view-container active">
-    <!-- dashboard is already shown above; this view stays minimal -->
-  </div>
+  <div id="dashboard-view" class="view-container active"></div>
 
   <div id="students-view" class="view-container">
     <div class="card card-soft p-3">
@@ -178,14 +187,32 @@
     <div class="card card-soft p-3">
       <div class="fw-semibold mb-2">Sign Out / Sign In</div>
 
+      <!-- Scanner -->
+      <div class="row g-3 mb-3">
+        <div class="col-12 col-md-8">
+          <label class="form-label">Scan Student ID</label>
+          <input id="scanStudentId" class="form-control" placeholder="Scan ID then press Enter..." autocomplete="off" />
+          <div class="small-muted mt-1">
+            Scanner behavior: Enter toggles sign-out/sign-in automatically for that student.
+          </div>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label">Default Destination (for scan)</label>
+          <select id="scanDestination" class="form-select">
+            <option value="Bathroom">Bathroom</option>
+            <option value="Nurse">Nurse</option>
+            <option value="Office">Office</option>
+            <option value="Counselor">Counselor</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+      </div>
+
       <div class="row g-3">
         <div class="col-12 col-md-5">
           <label class="form-label">Select Student</label>
           <select id="signoutStudentSelect" class="form-select"></select>
-
-          <div class="small-muted mt-2">
-            Tip: Use search bar at top to filter the student list in this dropdown.
-          </div>
+          <div class="small-muted mt-2">Tip: Use search bar at top to filter this dropdown.</div>
         </div>
 
         <div class="col-12 col-md-4">
@@ -283,9 +310,7 @@
         <div class="fw-semibold mb-2">Preview (first 10 rows)</div>
         <div class="csv-preview">
           <table class="table table-sm">
-            <thead>
-              <tr></tr>
-            </thead>
+            <thead><tr></tr></thead>
             <tbody id="csvPreviewBody"></tbody>
           </table>
         </div>
@@ -312,9 +337,7 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <p class="mb-2">
-          This student has already used <b>2 bathroom passes</b> this quarter.
-        </p>
+        <p class="mb-2">This student has already used <b>2 bathroom passes</b> this quarter.</p>
         <label class="form-label">Enter Override PIN</label>
         <input id="overridePinInput" type="password" class="form-control" placeholder="PIN" autocomplete="off" />
         <div id="overridePinError" class="text-danger mt-2 d-none">Incorrect PIN.</div>
@@ -392,13 +415,11 @@
   </div>
 </div>
 
-<!-- Bootstrap JS (keep as-is; it’s fine NOT to be module) -->
+<!-- Bootstrap JS (global, NOT module, and that's OK) -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 <!-- App entrypoint -->
 <script type="module" src="./main.js"></script>
 
-
 </body>
 </html>
-

@@ -14,7 +14,7 @@ export function initDB() {
     req.onupgradeneeded = () => {
       const db = req.result;
 
-      // Students
+      // students
       if (!db.objectStoreNames.contains('students')) {
         const s = db.createObjectStore('students', { keyPath: 'id' });
         s.createIndex('studentId', 'studentId', { unique: true });
@@ -27,19 +27,19 @@ export function initDB() {
         if (!s.indexNames.contains('name')) s.createIndex('name', 'name', { unique: false });
       }
 
-      // Signout records
+      // signouts (activity log)
       if (!db.objectStoreNames.contains('signouts')) {
-        const r = db.createObjectStore('signouts', { keyPath: 'id' });
-        r.createIndex('studentId', 'studentId', { unique: false });
-        r.createIndex('timestamp', 'timestamp', { unique: false });
-        r.createIndex('date', 'date', { unique: false });
-        r.createIndex('type', 'type', { unique: false });
+        const so = db.createObjectStore('signouts', { keyPath: 'id' });
+        so.createIndex('studentId', 'studentId', { unique: false });
+        so.createIndex('type', 'type', { unique: false });
+        so.createIndex('timestamp', 'timestamp', { unique: false });
+        so.createIndex('date', 'date', { unique: false });
       } else {
-        const r = req.transaction.objectStore('signouts');
-        if (!r.indexNames.contains('studentId')) r.createIndex('studentId', 'studentId', { unique: false });
-        if (!r.indexNames.contains('timestamp')) r.createIndex('timestamp', 'timestamp', { unique: false });
-        if (!r.indexNames.contains('date')) r.createIndex('date', 'date', { unique: false });
-        if (!r.indexNames.contains('type')) r.createIndex('type', 'type', { unique: false });
+        const so = req.transaction.objectStore('signouts');
+        if (!so.indexNames.contains('studentId')) so.createIndex('studentId', 'studentId', { unique: false });
+        if (!so.indexNames.contains('type')) so.createIndex('type', 'type', { unique: false });
+        if (!so.indexNames.contains('timestamp')) so.createIndex('timestamp', 'timestamp', { unique: false });
+        if (!so.indexNames.contains('date')) so.createIndex('date', 'date', { unique: false });
       }
     };
 
@@ -50,13 +50,12 @@ export function initDB() {
   return dbPromise;
 }
 
-export async function ensureDBInitialized() {
-  return initDB();
-}
-
 function txStore(db, storeName, mode = 'readonly') {
-  const tx = db.transaction(storeName, mode);
-  return { tx, store: tx.objectStore(storeName) };
+  // If storeName is wrong/missing, this throws NotFoundError — better error message:
+  if (!db.objectStoreNames.contains(storeName)) {
+    throw new Error(`IndexedDB store "${storeName}" not found. (Did the DB upgrade run?)`);
+  }
+  return db.transaction(storeName, mode).objectStore(storeName);
 }
 
 function reqToPromise(req) {
@@ -66,132 +65,116 @@ function reqToPromise(req) {
   });
 }
 
-// ---------------- Students ----------------
-
-export async function getAllStudents() {
-  const db = await initDB();
-  const { store } = txStore(db, 'students', 'readonly');
-  return reqToPromise(store.getAll());
-}
-
-export async function getStudentByStudentId(studentId) {
-  const db = await initDB();
-  const { store } = txStore(db, 'students', 'readonly');
-  const idx = store.index('studentId');
-  return reqToPromise(idx.get(studentId));
-}
-
-export async function saveStudent(student) {
-  const db = await initDB();
-  const { tx, store } = txStore(db, 'students', 'readwrite');
-  store.put(student);
+function cursorToArray(req, limit = Infinity) {
   return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve(student);
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
-}
-
-export async function deleteStudentById(id) {
-  const db = await initDB();
-  const { tx, store } = txStore(db, 'students', 'readwrite');
-  store.delete(id);
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
-}
-
-export async function batchSaveStudents(students) {
-  const db = await initDB();
-  const { tx, store } = txStore(db, 'students', 'readwrite');
-
-  for (const s of students) store.put(s);
-
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve(students.length);
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
-}
-
-export async function getActiveSignouts() {
-  // easiest + reliable: query students, filter signed out
-  const students = await getAllStudents();
-  return students.filter(s => s.isSignedOut);
-}
-
-// ---------------- Signout records ----------------
-
-export async function addSignoutRecord(record) {
-  const db = await initDB();
-  const { tx, store } = txStore(db, 'signouts', 'readwrite');
-  store.put(record);
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve(record);
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
-}
-
-export async function getRecentRecords(limit = 10) {
-  const db = await initDB();
-  const { store } = txStore(db, 'signouts', 'readonly');
-
-  // Use timestamp index if available
-  const idx = store.index('timestamp');
-  const out = [];
-
-  return new Promise((resolve, reject) => {
-    const cursorReq = idx.openCursor(null, 'prev'); // newest first
-    cursorReq.onsuccess = () => {
-      const cursor = cursorReq.result;
+    const out = [];
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const cursor = req.result;
       if (!cursor || out.length >= limit) return resolve(out);
       out.push(cursor.value);
       cursor.continue();
     };
-    cursorReq.onerror = () => reject(cursorReq.error);
   });
 }
 
-export async function getBathroomSignoutsForStudentInRange(studentId, startISO, endISO) {
+// ---------- Students ----------
+export async function getAllStudents() {
   const db = await initDB();
-  const { store } = txStore(db, 'signouts', 'readonly');
+  const store = txStore(db, 'students', 'readonly');
+  const all = await reqToPromise(store.getAll());
+  return Array.isArray(all) ? all : [];
+}
+
+export async function getStudentByStudentId(studentId) {
+  const db = await initDB();
+  const store = txStore(db, 'students', 'readonly');
   const idx = store.index('studentId');
-
-  const records = [];
-  return new Promise((resolve, reject) => {
-    const cursorReq = idx.openCursor(IDBKeyRange.only(studentId));
-    cursorReq.onsuccess = () => {
-      const cursor = cursorReq.result;
-      if (!cursor) {
-        // filter
-        const filtered = records.filter(r => {
-          if (r.type !== 'signout') return false;
-          if (r.destination !== 'Bathroom') return false;
-          const t = r.timestamp || '';
-          return t >= startISO && t <= endISO;
-        });
-        return resolve(filtered);
-      }
-      records.push(cursor.value);
-      cursor.continue();
-    };
-    cursorReq.onerror = () => reject(cursorReq.error);
-  });
+  return await reqToPromise(idx.get(String(studentId)));
 }
 
-// Optional helper for Step 3/4 later
-export async function resetDatabase() {
+export async function saveStudent(student) {
   const db = await initDB();
-  db.close();
-  dbPromise = null;
+  const store = txStore(db, 'students', 'readwrite');
+  await reqToPromise(store.put(student));
+  return student;
+}
+
+export async function deleteStudentById(id) {
+  const db = await initDB();
+  const store = txStore(db, 'students', 'readwrite');
+  await reqToPromise(store.delete(id));
+}
+
+export async function batchSaveStudents(students) {
+  const db = await initDB();
+  const store = txStore(db, 'students', 'readwrite');
 
   await new Promise((resolve, reject) => {
-    const req = indexedDB.deleteDatabase(DB_NAME);
-    req.onsuccess = () => resolve(true);
-    req.onerror = () => reject(req.error);
-    req.onblocked = () => reject(new Error('Delete blocked. Close other tabs using this site.'));
+    let i = 0;
+    const putNext = () => {
+      if (i >= students.length) return resolve();
+      const r = store.put(students[i]);
+      r.onerror = () => reject(r.error);
+      r.onsuccess = () => { i++; putNext(); };
+    };
+    putNext();
+  });
+}
+
+// ---------- Signout records ----------
+export async function addSignoutRecord(record) {
+  const db = await initDB();
+  const store = txStore(db, 'signouts', 'readwrite');
+  await reqToPromise(store.put(record));
+  return record;
+}
+
+export async function getRecentRecords(limit = 10) {
+  const db = await initDB();
+  const store = txStore(db, 'signouts', 'readonly');
+  const idx = store.index('timestamp');
+
+  // newest first
+  const req = idx.openCursor(null, 'prev');
+  const rows = await cursorToArray(req, limit);
+  return rows;
+}
+
+export async function getActiveSignouts() {
+  // active signouts are in students store: isSignedOut === true
+  const students = await getAllStudents();
+  return students.filter(s => !!s.isSignedOut);
+}
+
+// Bathroom passes within date range (quarter)
+export async function getBathroomSignoutsForStudentInRange(studentId, startISO, endISO) {
+  const db = await initDB();
+  const store = txStore(db, 'signouts', 'readonly');
+  const idx = store.index('studentId');
+
+  const allForStudent = await cursorToArray(idx.openCursor(IDBKeyRange.only(String(studentId))));
+  const startMs = new Date(startISO).getTime();
+  const endMs = new Date(endISO).getTime();
+
+  return allForStudent.filter(r => {
+    if (r.type !== 'signout') return false;
+    if (r.destination !== 'Bathroom') return false;
+    const t = r.timestamp ? new Date(r.timestamp).getTime() : 0;
+    return t >= startMs && t <= endMs;
+  });
+}
+
+// ---------- Dev tools ----------
+export async function resetDatabase() {
+  if (dbPromise) {
+    try { (await dbPromise).close(); } catch {}
+    dbPromise = null;
+  }
+  await new Promise((resolve, reject) => {
+    const del = indexedDB.deleteDatabase(DB_NAME);
+    del.onsuccess = () => resolve();
+    del.onerror = () => reject(del.error);
+    del.onblocked = () => resolve();
   });
 }
