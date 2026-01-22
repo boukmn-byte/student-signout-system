@@ -1,23 +1,17 @@
-// quick-actions.js - Quick nav + Add Student button wiring
+// quick-actions.js (ES module)
 
-document.addEventListener('DOMContentLoaded', initializeQuickActions);
+let _navigate = null;
 
-function initializeQuickActions() {
-  document.getElementById('quick-signout')?.addEventListener('click', () => {
-    if (typeof showSignOut === 'function') showSignOut();
-  });
+export function setQuickActionsConfig({ navigate }) {
+  _navigate = navigate;
+}
 
-  document.getElementById('quick-students')?.addEventListener('click', () => {
-    if (typeof showStudents === 'function') showStudents();
-  });
+export function initQuickActions() {
+  document.getElementById('quick-signout')?.addEventListener('click', () => _navigate?.showSignOut?.());
+  document.getElementById('quick-students')?.addEventListener('click', () => _navigate?.showStudents?.());
+  document.getElementById('quick-import')?.addEventListener('click', () => _navigate?.showCSVImport?.());
 
-  document.getElementById('quick-import')?.addEventListener('click', () => {
-    if (typeof showCSVImport === 'function') showCSVImport();
-  });
-
-  document.getElementById('addStudentBtn')?.addEventListener('click', () => {
-    openAddStudentModal();
-  });
+  document.getElementById('addStudentBtn')?.addEventListener('click', openAddStudentModal);
 }
 
 function openAddStudentModal() {
@@ -25,7 +19,6 @@ function openAddStudentModal() {
   const form = document.getElementById('editStudentForm');
   if (!modalEl || !form) return;
 
-  // reset
   form.reset();
   delete form.dataset.studentId;
   modalEl.querySelector('.modal-title').textContent = 'Add New Student';

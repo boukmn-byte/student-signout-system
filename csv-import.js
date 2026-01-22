@@ -1,13 +1,19 @@
-// csv-import.js - CSV import with preview + mapping + DB-safe import
+// csv-import.js (ES module) — CSV import with preview + mapping + DB-safe import
+
+import {
+  ensureDBInitialized,
+  getStudentByStudentId,
+  batchSaveStudents,
+} from './database.js';
+
+import { resetCSVImport as resetCSVImportUI, refreshUIAfterRosterChange } from './ui.js';
 
 let csvData = [];
 let csvHeaders = [];
 let columnMapping = { name: null, id: null, grade: null, gender: null, course: null };
 let skipRows = 1;
 
-document.addEventListener('DOMContentLoaded', initCSVImport);
-
-function initCSVImport() {
+export function initCSVImport() {
   document.getElementById('csvFile')?.addEventListener('change', handleFileSelect);
   document.getElementById('skipRows')?.addEventListener('input', handleSkipRowsChange);
   document.getElementById('autoDetectBtn')?.addEventListener('click', autoDetectColumns);
@@ -19,8 +25,36 @@ function initCSVImport() {
   document.getElementById('startImportBtn')?.addEventListener('click', startDataImport);
   document.getElementById('resetImportBtn')?.addEventListener('click', resetCSVImport);
 
-  // Initialize dropdowns empty
   resetCSVImport();
+}
+
+export function resetCSVImport() {
+  const fileInput = document.getElementById('csvFile');
+  if (fileInput) fileInput.value = '';
+
+  csvData = [];
+  csvHeaders = [];
+  columnMapping = { name: null, id: null, grade: null, gender: null, course: null };
+
+  skipRows = 1;
+  const skipRowsInput = document.getElementById('skipRows');
+  if (skipRowsInput) skipRowsInput.value = '1';
+
+  document.getElementById('csvPreview')?.classList.add('d-none');
+
+  const msg = document.getElementById('validationMsg');
+  if (msg) msg.classList.add('d-none');
+
+  ['col-name','col-id','col-grade','col-gender','col-course'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '<option value="">Select column...</option>';
+  });
+
+  const btn = document.getElementById('startImportBtn');
+  if (btn) btn.disabled = true;
+
+  document.getElementById('importErrorAlert')?.classList.add('d-none');
+  document.getElementById('importSuccessAlert')?.classList.add('d-none');
 }
 
 function handleSkipRowsChange(e) {
@@ -35,12 +69,11 @@ async function handleFileSelect(event) {
   try {
     const text = await file.text();
     parseCSVData(text);
-  } catch (e) {
+  } catch {
     showImportError('Failed to read file.');
   }
 }
 
-// Robust-ish CSV parsing for common cases (supports quoted commas)
 function parseCSVLine(line) {
   const out = [];
   let cur = '';
@@ -49,9 +82,8 @@ function parseCSVLine(line) {
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
 
-    if (ch === '"' ) {
+    if (ch === '"') {
       if (inQuotes && line[i + 1] === '"') {
-        // escaped quote
         cur += '"';
         i++;
       } else {
@@ -157,7 +189,7 @@ function autoDetectColumns() {
     if (detected.name === null && (h.includes('name') || h.includes('student'))) detected.name = idx;
     if (detected.id === null && (h === 'id' || h.includes('studentid') || h.includes('student id'))) detected.id = idx;
     if (detected.grade === null && h.includes('grade')) detected.grade = idx;
-    if (detected.gender === null && h.includes('gender') || h.includes('sex')) detected.gender = idx;
+    if (detected.gender === null && (h.includes('gender') || h.includes('sex'))) detected.gender = idx;
     if (detected.course === null && (h.includes('course') || h.includes('class') || h.includes('period'))) detected.course = idx;
   });
 
@@ -259,10 +291,9 @@ async function startDataImport() {
         if (!studentId) throw new Error('Student ID is required');
         if (!grade) throw new Error('Grade is required');
 
-        // If student exists, update roster fields but preserve signout state
         const existing = await getStudentByStudentId(studentId);
-
         const now = new Date().toISOString();
+
         const student = existing ? {
           ...existing,
           name,
@@ -291,9 +322,7 @@ async function startDataImport() {
       }
     }
 
-    if (studentsToSave.length === 0) {
-      throw new Error('No valid student data found.');
-    }
+    if (studentsToSave.length === 0) throw new Error('No valid student data found.');
 
     await batchSaveStudents(studentsToSave);
 
@@ -306,12 +335,8 @@ async function startDataImport() {
     btn.textContent = original;
     btn.disabled = false;
 
-    // Refresh UI and navigate back to dashboard
-    if (window.APP_CONFIG?.refreshAll) {
-      await window.APP_CONFIG.refreshAll();
-      if (typeof showDashboard === 'function') showDashboard();
-    }
-
+    await refreshUIAfterRosterChange();
+    resetCSVImportUI?.(); // harmless if not needed
   } catch (e) {
     console.error(e);
     showImportError(`Import failed: ${e.message}`);
@@ -321,35 +346,6 @@ async function startDataImport() {
       btn.disabled = false;
     }
   }
-}
-
-function resetCSVImport() {
-  const fileInput = document.getElementById('csvFile');
-  if (fileInput) fileInput.value = '';
-
-  csvData = [];
-  csvHeaders = [];
-  columnMapping = { name: null, id: null, grade: null, gender: null, course: null };
-
-  skipRows = 1;
-  const skipRowsInput = document.getElementById('skipRows');
-  if (skipRowsInput) skipRowsInput.value = '1';
-
-  document.getElementById('csvPreview')?.classList.add('d-none');
-
-  const msg = document.getElementById('validationMsg');
-  if (msg) msg.classList.add('d-none');
-
-  ['col-name','col-id','col-grade','col-gender','col-course'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.innerHTML = '<option value="">Select column...</option>';
-  });
-
-  const btn = document.getElementById('startImportBtn');
-  if (btn) btn.disabled = true;
-
-  document.getElementById('importErrorAlert')?.classList.add('d-none');
-  document.getElementById('importSuccessAlert')?.classList.add('d-none');
 }
 
 function showImportError(message) {
@@ -378,5 +374,3 @@ function showImportSuccess(message) {
     alert(message);
   }
 }
-
-window.resetCSVImport = resetCSVImport;
