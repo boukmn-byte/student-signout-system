@@ -1,41 +1,38 @@
-// app-context.js — shared app state, no window globals
+// app-context.js — shared app state + cross-module helpers (ES module)
 
-const _state = {
+export const App = {
+  // runtime config injected by main.js
   config: {
     TEACHER_OVERRIDE_PIN: '2468',
     ADMIN_PASSWORD: 'admin123',
-    APP_DEV_MODE: true, // set false when you want to hide dev tools
-  },
-  isAdmin: false,
-  currentView: 'dashboard',
 
-  // injected by main.js
+    // Scanner behavior:
+    // 'select' => just navigate to Sign Out and select the student
+    // 'toggle' => if student is OUT -> sign in; else sign out (Bathroom)
+    SCANNER_MODE: 'select',
+    SCANNER_DEFAULT_DESTINATION: 'Bathroom',
+  },
+
+  // navigation hooks injected by main.js
+  nav: {
+    showDashboard: () => {},
+    showStudents: () => {},
+    showSignOut: () => {},
+    showCSVImport: () => {},
+    refreshAll: async () => {},
+  },
+
+  // admin flag
+  isAdmin: false,
+
+  // toast hooks injected by main.js
   showError: (msg) => alert(msg),
   showSuccess: (msg) => alert(msg),
-  refreshAll: async () => {},
-  navigate: (view) => {},
-};
 
-export const App = {
-  get config() { return _state.config; },
-  setConfig(partial) { _state.config = { ..._state.config, ...partial }; },
-
-  get isAdmin() { return _state.isAdmin; },
-  setAdmin(v) { _state.isAdmin = !!v; },
-
-  get currentView() { return _state.currentView; },
-  setView(v) { _state.currentView = v; },
-
-  bindUI({ showError, showSuccess, refreshAll, navigate }) {
-    if (showError) _state.showError = showError;
-    if (showSuccess) _state.showSuccess = showSuccess;
-    if (refreshAll) _state.refreshAll = refreshAll;
-    if (navigate) _state.navigate = navigate;
+  setAdmin(enabled) {
+    this.isAdmin = !!enabled;
+    document.querySelectorAll('.admin-only').forEach(el => {
+      el.classList.toggle('d-none', !this.isAdmin);
+    });
   },
-
-  showError(msg) { _state.showError(msg); },
-  showSuccess(msg) { _state.showSuccess(msg); },
-
-  async refreshAll() { return _state.refreshAll(); },
-  navigate(view) { return _state.navigate(view); },
 };

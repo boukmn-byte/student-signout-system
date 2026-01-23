@@ -1,12 +1,11 @@
-// csv-import.js (ES module) — CSV import with preview + mapping + DB-safe import
+// csv-import.js — CSV import with preview + mapping + DB-safe import (ES module)
 
+import { App } from './app-context.js';
 import {
   ensureDBInitialized,
   getStudentByStudentId,
   batchSaveStudents,
 } from './database.js';
-
-import { resetCSVImport as resetCSVImportUI, refreshUIAfterRosterChange } from './ui.js';
 
 let csvData = [];
 let csvHeaders = [];
@@ -28,35 +27,6 @@ export function initCSVImport() {
   resetCSVImport();
 }
 
-export function resetCSVImport() {
-  const fileInput = document.getElementById('csvFile');
-  if (fileInput) fileInput.value = '';
-
-  csvData = [];
-  csvHeaders = [];
-  columnMapping = { name: null, id: null, grade: null, gender: null, course: null };
-
-  skipRows = 1;
-  const skipRowsInput = document.getElementById('skipRows');
-  if (skipRowsInput) skipRowsInput.value = '1';
-
-  document.getElementById('csvPreview')?.classList.add('d-none');
-
-  const msg = document.getElementById('validationMsg');
-  if (msg) msg.classList.add('d-none');
-
-  ['col-name','col-id','col-grade','col-gender','col-course'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.innerHTML = '<option value="">Select column...</option>';
-  });
-
-  const btn = document.getElementById('startImportBtn');
-  if (btn) btn.disabled = true;
-
-  document.getElementById('importErrorAlert')?.classList.add('d-none');
-  document.getElementById('importSuccessAlert')?.classList.add('d-none');
-}
-
 function handleSkipRowsChange(e) {
   skipRows = parseInt(e.target.value, 10);
   if (Number.isNaN(skipRows) || skipRows < 0) skipRows = 0;
@@ -74,6 +44,7 @@ async function handleFileSelect(event) {
   }
 }
 
+// supports quoted commas
 function parseCSVLine(line) {
   const out = [];
   let cur = '';
@@ -100,6 +71,7 @@ function parseCSVLine(line) {
 
     cur += ch;
   }
+
   out.push(cur.trim());
   return out;
 }
@@ -182,7 +154,6 @@ function updateColumnDropdowns() {
 
 function autoDetectColumns() {
   const lower = csvHeaders.map(h => String(h || '').toLowerCase());
-
   const detected = { name: null, id: null, grade: null, gender: null, course: null };
 
   lower.forEach((h, idx) => {
@@ -335,8 +306,8 @@ async function startDataImport() {
     btn.textContent = original;
     btn.disabled = false;
 
-    await refreshUIAfterRosterChange();
-    resetCSVImportUI?.(); // harmless if not needed
+    await App.nav.refreshAll();
+    App.nav.showDashboard();
   } catch (e) {
     console.error(e);
     showImportError(`Import failed: ${e.message}`);
@@ -348,6 +319,35 @@ async function startDataImport() {
   }
 }
 
+export function resetCSVImport() {
+  const fileInput = document.getElementById('csvFile');
+  if (fileInput) fileInput.value = '';
+
+  csvData = [];
+  csvHeaders = [];
+  columnMapping = { name: null, id: null, grade: null, gender: null, course: null };
+
+  skipRows = 1;
+  const skipRowsInput = document.getElementById('skipRows');
+  if (skipRowsInput) skipRowsInput.value = '1';
+
+  document.getElementById('csvPreview')?.classList.add('d-none');
+
+  const msg = document.getElementById('validationMsg');
+  if (msg) msg.classList.add('d-none');
+
+  ['col-name','col-id','col-grade','col-gender','col-course'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '<option value="">Select column...</option>';
+  });
+
+  const btn = document.getElementById('startImportBtn');
+  if (btn) btn.disabled = true;
+
+  document.getElementById('importErrorAlert')?.classList.add('d-none');
+  document.getElementById('importSuccessAlert')?.classList.add('d-none');
+}
+
 function showImportError(message) {
   const el = document.getElementById('importErrorAlert');
   const ok = document.getElementById('importSuccessAlert');
@@ -357,7 +357,7 @@ function showImportError(message) {
     el.textContent = message;
     el.classList.remove('d-none');
   } else {
-    alert(message);
+    App.showError(message);
   }
 }
 
@@ -371,6 +371,6 @@ function showImportSuccess(message) {
     el.classList.remove('d-none');
     setTimeout(() => el.classList.add('d-none'), 3000);
   } else {
-    alert(message);
+    App.showSuccess(message);
   }
 }

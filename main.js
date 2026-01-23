@@ -1,11 +1,10 @@
-// main.js (ES module) — App startup + navigation + admin mode
+// main.js — App startup + navigation + admin mode + scanner (ES module)
 
-import { initDB } from './database.js';
 import { App } from './app-context.js';
 import { $ } from './dom.js';
+import { initDB } from './database.js';
 
 import {
-  setUIConfig,
   loadDashboardStats,
   loadStudentsTable,
   loadSignOutForm,
@@ -18,49 +17,74 @@ import {
   signInSelectedStudent,
   saveStudentFromModal,
   confirmOverride,
-  enableScannerMode, // optional export (we’ll add in ui.js if not there yet)
+  refreshUIAfterRosterChange,
+  handleScannedStudentId,
 } from './ui.js';
 
-import { initCSVImport } from './csv-import.js';
+import { initCSVImport, resetCSVImport } from './csv-import.js';
 import { initQuickActions } from './quick-actions.js';
-import { attachDevResetDB } from './dev-reset.js';
 
-// ---- Config (you can change later) ----
-const TEACHER_OVERRIDE_PIN = '2468';
-const ADMIN_PASSWORD = 'admin123';
+// ---------------- Safe storage helpers ----------------
+function safeGetItem(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function safeSetItem(key, value) {
+  try { localStorage.setItem(key, value); } catch {}
+}
+function safeRemoveItem(key) {
+  try { localStorage.removeItem(key); } catch {}
+}
 
-// ---- App State ----
+// ---------------- Toast helpers ----------------
+function showErrorMessage(message) {
+  console.error(message);
+  const toastEl = $('errorToast');
+  if (toastEl && window.bootstrap) {
+    const body = toastEl.querySelector('.toast-body');
+    if (body) body.textContent = message;
+    new window.bootstrap.Toast(toastEl).show();
+  } else {
+    alert(message);
+  }
+}
+function showSuccessMessage(message) {
+  console.log(message);
+  const toastEl = $('successToast');
+  if (toastEl && window.bootstrap) {
+    const body = toastEl.querySelector('.toast-body');
+    if (body) body.textContent = message;
+    new window.bootstrap.Toast(toastEl).show();
+  } else {
+    alert(message);
+  }
+}
+
+App.showError = showErrorMessage;
+App.showSuccess = showSuccessMessage;
+
+// ---------------- Views / Navigation ----------------
 let currentView = 'dashboard';
 
-// ---- Small helpers ----
 function showOnlyView(viewId) {
   document.querySelectorAll('.view-container').forEach(el => el.classList.remove('active'));
-  document.getElementById(viewId)?.classList.add('active');
+  $(viewId)?.classList.add('active');
 
   document.querySelectorAll('.nav-link').forEach(link => link.classList.remove('active'));
+
   const navMap = {
     'dashboard-view': 'nav-dashboard',
     'students-view': 'nav-students',
     'signout-view': 'nav-signout',
     'csv-import-view': 'nav-csv-import',
   };
-  const navId = navMap[viewId];
-  if (navId) document.getElementById(navId)?.classList.add('active');
-}
 
-async function refreshAll() {
-  await loadDashboardStats();
-  await loadStudentsTable();
-  await loadSignOutForm();
-  await loadCurrentlyOutList();
-  await loadQuickAccessStudents();
-  await loadRecentSignouts();
+  const navId = navMap[viewId];
+  if (navId) $(navId)?.classList.add('active');
 }
 
 function showDashboard() {
   currentView = 'dashboard';
   showOnlyView('dashboard-view');
-  // dashboard widgets are outside view container; refresh quickly
   loadDashboardStats();
   loadQuickAccessStudents();
   loadRecentSignouts();
@@ -82,12 +106,35 @@ async function showSignOut() {
 function showCSVImport() {
   currentView = 'csv-import';
   showOnlyView('csv-import-view');
-  initCSVImport(); // safe to call; it should wire listeners once
+  resetCSVImport();
 }
 
-// ---- Admin login ----
+// export nav hooks into App
+App.nav.showDashboard = showDashboard;
+App.nav.showStudents = showStudents;
+App.nav.showSignOut = showSignOut;
+App.nav.showCSVImport = showCSVImport;
+
+// ---------------- Refresh / Init ----------------
+async function refreshAll() {
+  await loadDashboardStats();
+  await loadStudentsTable();
+  await loadSignOutForm();
+  await loadCurrentlyOutList();
+  await loadQuickAccessStudents();
+  await loadRecentSignouts();
+}
+App.nav.refreshAll = refreshAll;
+
+// ---------------- Admin UI ----------------
+function loadAdminStatusFromStorage() {
+  const enabled = safeGetItem('isAdmin') === 'true';
+  App.setAdmin(enabled);
+}
+
 function toggleAdminMode() {
   if (App.isAdmin) {
+    safeRemoveItem('isAdmin');
     App.setAdmin(false);
     App.showSuccess('Logged out of admin mode');
     loadStudentsTable();
@@ -95,7 +142,8 @@ function toggleAdminMode() {
   }
 
   const password = prompt('Enter admin password:');
-  if (password === ADMIN_PASSWORD) {
+  if (password === App.config.ADMIN_PASSWORD) {
+    safeSetItem('isAdmin', 'true');
     App.setAdmin(true);
     App.showSuccess('Logged in as admin');
     loadStudentsTable();
@@ -104,21 +152,61 @@ function toggleAdminMode() {
   }
 }
 
-// ---- Search ----
+// ---------------- Search ----------------
 function handleSearch(term) {
   const t = (term || '').toLowerCase();
-
-  if (currentView === 'students') {
-    filterStudentsTable(t);
-  } else if (currentView === 'signout') {
-    filterSignOutStudents(t);
-  } else {
-    // convenience: filter signout dropdown from dashboard too
-    filterSignOutStudents(t);
-  }
+  if (currentView === 'students') filterStudentsTable(t);
+  else filterSignOutStudents(t);
 }
 
-// ---- Wire events ----
+// ---------------- Scanner (barcode wedge support) ----------------
+// Most scanners type digits fast then send Enter.
+// We capture fast digit bursts and on Enter treat as studentId.
+let scanBuf = '';
+let scanLastTs = 0;
+
+function isLikelyScanBurst(nowMs) {
+  // if keys arrive very fast, treat as scanner stream
+  return (nowMs - scanLastTs) < 50;
+}
+
+function setupScannerListener() {
+  document.addEventListener('keydown', async (e) => {
+    // ignore if user is typing into a text box / password, etc.
+    const tag = (document.activeElement?.tagName || '').toLowerCase();
+    const isTypingField =
+      tag === 'input' || tag === 'textarea' || document.activeElement?.isContentEditable;
+
+    const now = Date.now();
+
+    if (e.key === 'Enter') {
+      const candidate = scanBuf.trim();
+      scanBuf = '';
+      scanLastTs = 0;
+      if (candidate.length >= 4) {
+        // run scan action
+        await handleScannedStudentId(candidate);
+      }
+      return;
+    }
+
+    // only collect digits (adjust if your IDs include letters)
+    if (/^\d$/.test(e.key)) {
+      if (!isTypingField || isLikelyScanBurst(now)) {
+        scanBuf += e.key;
+        scanLastTs = now;
+      }
+    } else {
+      // reset if non-digit appears during scan
+      if (isLikelyScanBurst(now)) {
+        scanBuf = '';
+      }
+      scanLastTs = now;
+    }
+  });
+}
+
+// ---------------- Event listeners ----------------
 function setupEventListeners() {
   // Nav
   $('nav-dashboard')?.addEventListener('click', showDashboard);
@@ -127,7 +215,7 @@ function setupEventListeners() {
   $('nav-csv-import')?.addEventListener('click', showCSVImport);
 
   // Search
-  $('searchInput')?.addEventListener('input', (e) => handleSearch(e.target.value));
+  $('searchInput')?.addEventListener('input', (e) => handleSearch(e.target.value || ''));
 
   // Refresh buttons
   $('refreshDashboard')?.addEventListener('click', async () => {
@@ -135,7 +223,6 @@ function setupEventListeners() {
     await loadQuickAccessStudents();
     await loadRecentSignouts();
   });
-
   $('refreshStudents')?.addEventListener('click', async () => {
     await loadStudentsTable();
   });
@@ -143,52 +230,44 @@ function setupEventListeners() {
   // Admin toggle
   $('adminToggle')?.addEventListener('click', toggleAdminMode);
 
-  // Sign out / in
-  $('btnSignOut')?.addEventListener('click', async () => attemptSignOut());
-  $('btnSignIn')?.addEventListener('click', async () => signInSelectedStudent());
+  // Sign out / sign in
+  $('btnSignOut')?.addEventListener('click', attemptSignOut);
+  $('btnSignIn')?.addEventListener('click', signInSelectedStudent);
 
-  // Add/Edit modal submit
+  // Add/Edit student modal save
   $('editStudentForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     await saveStudentFromModal();
   });
 
-  // Override confirm
-  $('overrideConfirmBtn')?.addEventListener('click', async () => confirmOverride());
-
-  // Scanner mode toggle (we’ll add the button in index.html in a later step)
-  $('scanToggleBtn')?.addEventListener('click', () => enableScannerMode?.());
+  // Override modal confirm
+  $('overrideConfirmBtn')?.addEventListener('click', confirmOverride);
 }
 
-// ---- Init ----
 async function initApp() {
   try {
-    // set shared config once
-    App.setConfig({ TEACHER_OVERRIDE_PIN });
+    console.log('Initializing...');
 
-    // UI hooks
-    setUIConfig({
-      onRosterChanged: refreshAll,
-    });
+    App.config.TEACHER_OVERRIDE_PIN = '2468';
+    App.config.ADMIN_PASSWORD = 'admin123';
+    App.config.SCANNER_MODE = 'select'; // change to 'toggle' if you want scan->auto sign in/out
 
-    // DB
     await initDB();
 
-    // optional dev tools
-    attachDevResetDB();
-
-    // other modules
+    setupEventListeners();
     initQuickActions();
     initCSVImport();
+    setupScannerListener();
 
-    setupEventListeners();
+    loadAdminStatusFromStorage();
 
-    // first render
     await refreshAll();
     showDashboard();
+
+    console.log('Initialized successfully');
   } catch (err) {
     console.error(err);
-    App.showError('Failed to initialize. Refresh the page.');
+    showErrorMessage('Failed to initialize. Refresh the page.');
   }
 }
 
